@@ -221,6 +221,25 @@ case "$1" in
 	  echo "Stopping the netpro File daemon"
 	  killproc ${BACFDBIN}/netpro-fd ${FD_PORT}
        }
+
+       # --- Stop netreplicator process ---
+       echo "[INFO] Checking and killing all netreplicator processes..."
+
+       # Find all PIDs of processes named 'netreplicator' (excluding the grep process itself)
+       pids=$(ps -ef | grep '[n]etreplicator' | awk '{print $2}')
+
+       # If any matching PIDs were found
+       if [ ! -z "$pids" ]; then
+           echo "[INFO] Found running netreplicator process PID(s): $pids"
+           # Iterate over each PID and forcefully kill it
+           for pid in $pids; do
+               kill -9 $pid && echo "[INFO] Successfully killed PID: $pid"
+           done
+       else
+           echo "[INFO] No running netreplicator processes found."
+       fi
+       # --- Stop netreplicator process end ---
+
        echo
        ;;
 
