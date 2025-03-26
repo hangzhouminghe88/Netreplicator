@@ -1,0 +1,242 @@
+#! /bin/sh
+#
+# netpro-fd  This shell script takes care of starting and stopping
+# the NETPRO UNIX client daemon.
+#
+
+DESTDIR=/usr/NETPRO5.02.8
+if [ ! -d $DESTDIR ]
+then			
+	exit
+fi
+
+# Get the aliases and functions
+. /etc/rc.d/init.d/functions
+if [ -f /etc/bashrc ]; then
+  . /etc/bashrc
+fi
+
+# NETPRO Source function library
+. /etc/profile.netpro
+
+
+PSCMD="ps -e -o pid,command"
+
+# All these are not *really* needed but it makes it
+#  easier to "steal" this code for the development 
+#  environment where they are different.
+#  
+BACFDBIN=/usr/NETPRO5.02.8/bin
+BACFDCFG=/usr/NETPRO5.02.8/conf
+BACSDBIN=/usr/NETPRO5.02.8/bin
+BACSDCFG=/usr/NETPRO5.02.8/conf
+BACDIRBIN=/usr/NETPRO5.02.8/bin
+BACDIRCFG=/usr/NETPRO5.02.8/conf
+PIDDIR=/usr/NETPRO5.02.8/working
+SUBSYSDIR=/usr/NETPRO5.02.8/working/subsys
+
+DIR_PORT=9501
+FD_PORT=9502
+SD_PORT=9503
+
+DIR_USER=
+DIR_GROUP=
+FD_USER=
+FD_GROUP=
+SD_USER=
+SD_GROUP=
+
+# A function to stop a program.
+killproc() {
+    RC=0
+    # Test syntax.
+    if [ $# = 0 ]; then
+	echo "Usage: killproc {program} [signal]"
+	return 1
+    fi
+
+    notset=0
+    # check for third arg to be kill level
+    if [ "$3" != "" ] ; then
+	killlevel=$3
+    else
+	notset=1
+	killlevel="-9"
+    fi
+
+    # Get base program name
+    base=`basename $1`
+
+    # Find pid.
+    pid=`pidofproc $base $2`
+
+    # Kill it.
+    if [ "$pid" != "" ] ; then
+	if [ "$notset" = "1" ] ; then
+	    if ps -p $pid>/dev/null 2>&1; then
+		# TERM first, then KILL if not dead
+		kill -TERM $pid 2>/dev/null
+		sleep 1
+		if ps -p $pid >/dev/null 2>&1 ; then
+		    sleep 1
+		    if ps -p $pid >/dev/null 2>&1 ; then
+			sleep 3
+			if ps -p $pid >/dev/null 2>&1 ; then
+			    kill -KILL $pid 2>/dev/null
+			fi
+		    fi
+		fi
+	     fi
+	     ps -p $pid >/dev/null 2>&1
+	     RC=$?
+	     [ $RC -eq 0 ] && failure "$base shutdown" || success "$base shutdown"
+	#    RC=$((! $RC))
+	# use specified level only
+	else
+	    if ps -p $pid >/dev/null 2>&1; then
+		kill $killlevel $pid 2>/dev/null
+		RC=$?
+		[ $RC -eq 0 ] && success "$base $killlevel" || failure "$base $killlevel"
+	    fi
+	fi
+    else
+	failure "$base shutdown"
+    fi
+    # Remove pid file if any.
+    if [ "$notset" = "1" ]; then
+	rm -f ${PIDDIR}/$base.$2.pid
+    fi
+    return $RC
+}
+
+# A function to find the pid of a program.
+pidofproc() {
+    pid=""
+    # Test syntax.
+    if [ $# = 0 ] ; then
+	echo "Usage: pidofproc {program}"
+	return 1
+    fi
+
+    # Get base program name
+    base=`basename $1`
+
+    # First try PID file
+    if [ -f ${PIDDIR}/$base.$2.pid ] ; then
+	pid=`head -n 1 ${PIDDIR}/$base.$2.pid`
+	if [ "$pid" != "" ] ; then
+	    echo $pid
+	    return 0
+	fi
+    fi
+
+    # Next try "pidof"
+   if [ -x /sbin/pidof ] ; then
+       pid=`/sbin/pidof $1`
+   fi
+   if [ "$pid" != "" ] ; then
+       echo $pid
+       return 0
+   fi
+
+    # Finally try to extract it from ps
+    ${PSCMD} | grep $1 | awk '{ print $1 }' | tr '\n' ' '
+    return 0
+}
+
+status() {
+    # Test syntax.
+    if [ $# = 0 ] ; then
+	echo "Usage: status {program}"
+	return 1
+    fi
+
+    # Get base program name
+    base=`basename $1`
+
+   # First try "pidof"
+   if [ -x /sbin/pidof ] ; then
+       pid=`/sbin/pidof $1`
+   fi
+   if [ "$pid" != "" ] ; then
+       echo "$base (pid $pid) is running..."
+       return 0
+   else
+       pid=`${PSCMD} | awk 'BEGIN { prog=ARGV[1]; ARGC=1 } 
+	     { if ((prog == $2) || (("(" prog ")") == $2) ||
+		  (("[" prog "]") == $2) ||
+		  ((prog ":") == $2)) { print $1 ; exit 0 } }' $1`
+       if [ "$pid" != "" ] ; then
+	   echo "$base (pid $pid) is running..."
+	   return 0
+       fi
+   fi
+
+    # Next try the PID files
+    if [ -f ${PIDDIR}/$base.$2.pid ] ; then
+	pid=`head -n 1 ${PIDDIR}/$base.$2.pid`
+	if [ "$pid" != "" ] ; then
+	    echo "$base dead but pid file exists"
+	    return 1
+	fi
+    fi
+    # See if the subsys lock exists
+    if [ -f ${SUBSYSDIR}/$base ] ; then
+	echo "$base dead but subsys locked"
+	return 2
+    fi
+    echo "$base is stopped"
+    return 3
+}
+
+success() {
+  return 0
+}
+
+failure() {
+  rc=$?
+  return $rc
+}
+
+case "$1" in
+    start)
+       [ -x ${BACFDBIN}/netpro-fd ] && {
+	  echo "Starting the netpro File daemon"
+	  OPTIONS=''
+	  if [ "${FD_USER}" != '' ]; then
+	     OPTIONS="${OPTIONS} -u ${FD_USER}"
+	  fi
+
+	  if [ "${FD_GROUP}" != '' ]; then
+	     OPTIONS="${OPTIONS} -g ${FD_GROUP}"
+	  fi
+
+	  ${BACFDBIN}/netpro-fd $2 ${OPTIONS} -v -c ${BACFDCFG}/netpro-fd.conf >${DESTDIR}/data/netpro-fd.log 2>&1 &
+       }
+       ;;
+
+    stop)
+       # Stop the FD first so that SD will fail jobs and update catalog
+       [ -x ${BACFDBIN}/netpro-fd ] && {
+	  echo "Stopping the netpro File daemon"
+	  killproc ${BACFDBIN}/netpro-fd ${FD_PORT}
+       }
+       echo
+       ;;
+
+    restart)
+       $0 stop
+       sleep 5
+       $0 start
+       ;;
+
+    status)
+       [ -x ${BACFDBIN}/netpro-fd   ] && status ${BACFDBIN}/netpro-fd  ${FD_PORT}
+       ;;
+
+    *)
+       echo "Usage: $0 {start|stop|restart|status}"
+       exit 1
+       ;;
+esac
+exit 0
